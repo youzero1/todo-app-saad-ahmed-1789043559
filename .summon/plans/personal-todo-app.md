@@ -1,0 +1,79 @@
+---
+status: pending
+title: Personal Todo App with Due Dates and Reminders
+---
+
+## Scope
+
+Single-user personal task tracker. No accounts, no sharing, no backend. All data in browser local storage. Feature emphasis is due dates and reminders.
+
+**In scope (v1):** add / edit / complete / delete tasks, sorting, active vs completed separation, due date picker, Today / Upcoming / Overdue grouping and filters, overdue highlighting, in-app + browser reminder notifications.
+
+**Explicitly out of scope (future additions only):** projects/lists, tags, priorities, subtasks, notes, stats/streaks, recurring tasks, sync.
+
+---
+
+## Phase 1 — Project scaffolding and styling baseline
+
+1. Create the Vite + React + TypeScript project skeleton with `index.html` at the repo root and all source under `src/`. Expected outcome: `npm run dev` boots an empty app.
+2. Add dependencies: `react`, `react-dom`, `@tanstack/react-router`; dev dependencies: `vite`, `@vitejs/plugin-react`, `typescript`, `@types/react`, `@types/react-dom`, `@tailwindcss/vite`, `@tanstack/router-plugin`. Expected outcome: `package.json` lists exactly these, with `"type": "module"` and `dev` / `build` / `preview` scripts.
+3. Configure `vite.config.ts` with the React plugin, the `@tailwindcss/vite` plugin, and the TanStack Router plugin in file-based mode pointing at `src/routes`. Add the `@/` → `src/` resolve alias. Expected outcome: the router plugin generates `src/routeTree.gen.ts` on dev start (never hand-edited).
+4. Configure `tsconfig.json` (and `tsconfig.node.json` if needed) for strict mode, `ESNext` modules, `bundler` resolution, `jsx: react-jsx`, and the `@/*` path mapping matching the Vite alias. Expected outcome: `@/` imports typecheck.
+5. Create `src/styles/global.css` starting with exactly `@import "tailwindcss";`, followed by a small `@theme` block defining the light palette (near-white page background, one calm accent hue, a muted text tone, and a distinct danger/overdue hue) and the base font stack. Expected outcome: single stylesheet, no other CSS files anywhere.
+6. Create `src/main.tsx` that imports `@/styles/global.css` once, builds the router from the generated route tree, and mounts the app into the `#root` element. Expected outcome: app renders with Tailwind utilities active.
+
+## Phase 2 — Types and pure date/domain logic
+
+7. Create `src/types/task.ts` defining the `Task` shape: stable string `id`, `title` string, `completed` boolean, `createdAt` ISO string, `updatedAt` ISO string, `completedAt` nullable ISO string, `dueAt` nullable ISO string (full timestamp so reminders can fire at a time of day), `reminderMinutesBefore` nullable number, and `reminderFiredAt` nullable ISO string used to guarantee a reminder fires at most once per task. Also define a `TaskFilter` union (`'all' | 'today' | 'upcoming' | 'overdue' | 'completed'`) and a `DueBucket` union (`'overdue' | 'today' | 'tomorrow' | 'upcoming' | 'none'`). Expected outcome: one shared source of truth for task data, imported everywhere via `@/types/task`.
+8. Create `src/lib/dates.ts` with pure, side-effect-free helpers that all accept an explicit "now" argument so they are testable and deterministic: start-of-day and end-of-day normalisation, same-day comparison, day-difference calculation, a `getDueBucket(dueAt, now)` returning a `DueBucket`, an `isOverdue(task, now)` that returns false for completed tasks, and a human-friendly `formatDueLabel` producing strings like "Overdue · Tue 4 Mar", "Today, 18:00", "Tomorrow, 09:00", or a weekday + date for anything further out. Expected outcome: all due-date presentation and grouping decisions live in this one file, and overdue state is always derived from `dueAt` vs the current time rather than stored on the task.
+9. Create `src/lib/tasks.ts` with pure task-collection helpers: `createTask(input)` returning a fully-populated `Task` with a generated id and timestamps, `toggleTask`, `updateTask`, `removeTask`, a `sortTasks` comparator (tasks with a due date first ordered by soonest `dueAt`, then undated tasks by newest `createdAt`, with completed tasks always ordered by most recently completed), a `filterTasks(tasks, filter, now)` implementing the `TaskFilter` semantics, and a `groupTasksByBucket(tasks, now)` returning ordered bucket sections. Expected outcome: route and component code contains no inline array logic.
+10. Create `src/lib/storage.ts` handling the local-storage boundary: a namespaced key constant, a `loadTasks()` that reads, JSON-parses, and validates each entry field-by-field while discarding malformed records instead of throwing, and a `saveTasks(tasks)` that serialises defensively inside a try/catch so a quota error or a privacy-mode block never crashes the app. Include a schema version field so future migrations are possible. Expected outcome: corrupted or absent storage yields an empty task list rather than a white screen.
+
+## Phase 3 — State hook
+
+11. Create `src/hooks/useTasks.ts` as the single owner of task state. It initialises lazily from `loadTasks()`, exposes a loading flag that is true only for the first paint so the UI can avoid an empty-state flash, and returns the task array plus `addTask`, `editTask`, `toggleTask`, `deleteTask`, and `clearCompleted` callbacks. Every mutation goes through the `src/lib/tasks.ts` helpers and persists via an effect that writes to storage whenever the task array changes. Expected outcome: tasks survive a full page reload; no component touches `localStorage` directly.
+12. Create `src/hooks/useNow.ts` returning the current time as a state value refreshed on a modest interval (roughly every 30 seconds) and cleaning up its timer on unmount. Expected outcome: overdue highlighting and relative due labels re-render on their own as time passes, without manual refresh.
+13. Create `src/hooks/useReminders.ts` implementing the reminder engine described in Phase 5. Expected outcome: a self-contained hook the root layout can call once.
+
+## Phase 4 — Routes and components
+
+14. Create `src/routes/__root.tsx` as the app shell: a centred max-width column with generous vertical padding, a lightweight header showing the app name and a live count of tasks due today, an `<Outlet />`, and a mount point for the reminder fallback banner. Call `useReminders` here so reminders run on every route. Expected outcome: consistent minimal chrome across all routes.
+15. Create `src/routes/index.tsx` as the main task view. It owns the `useTasks` and `useNow` values plus the active `TaskFilter` in local state, and composes the components below. Expected outcome: the whole app is usable from `/`.
+16. Create `src/routes/settings.tsx` as a small secondary route holding the notification-permission control, a default-reminder-lead-time preference, and a destructive "clear all data" action with an inline confirm step. Expected outcome: permission handling is discoverable without cluttering the main list.
+17. Create `src/components/TaskComposer.tsx` — the add-task form. A single always-visible title input that submits on Enter, with a collapsed secondary row revealing a native `date` + `time` pair for the due date and a reminder lead-time select. Submitting clears the form and returns focus to the title input. Expected outcome: a task can be created in one keystroke path without touching the mouse.
+18. Create `src/components/DueDatePicker.tsx` wrapping the native date/time inputs behind a small typed value/onChange contract, with quick-set shortcut buttons for Today evening, Tomorrow morning, and Next week, plus a clear-date action. Expected outcome: due dates are fast to set and the native mobile pickers are used on small screens.
+19. Create `src/components/FilterTabs.tsx` rendering the `TaskFilter` options as a horizontal tab row with per-filter counts, implemented as a proper radio-style tab group with arrow-key navigation and a visible focus ring. Expected outcome: filtering is one click or one keypress away.
+20. Create `src/components/TaskList.tsx` which, for the All / Today / Upcoming filters, renders the ordered bucket sections from `groupTasksByBucket` with subtle section headings, and for Overdue / Completed renders a single flat sorted list. Expected outcome: overdue items always surface at the top of the default view.
+21. Create `src/components/TaskItem.tsx` — one row: a large accessible checkbox with a strike-through and muted treatment when completed, the title, a `DueBadge`, and edit/delete controls that are always focusable but only visually prominent on hover or focus. Double-click or the edit control swaps the title into an inline input that saves on Enter or blur and cancels on Escape. Expected outcome: editing and completing feel immediate and never require a modal.
+22. Create `src/components/DueBadge.tsx` rendering `formatDueLabel` output with tone driven by the `DueBucket` — danger tone for overdue, accent for today, muted for everything else — and a small icon indicating whether a reminder is set. Expected outcome: due state is readable at a glance.
+23. Create `src/components/EmptyState.tsx` with per-filter copy (no tasks at all, nothing due today, nothing upcoming, nothing overdue, nothing completed) and an optional call-to-action that focuses the composer input. Expected outcome: no filter ever renders a blank void.
+24. Create `src/components/CompletedSection.tsx` as a collapsible container for completed tasks shown beneath the active list on the All filter, including the "clear completed" action and a count. Expected outcome: completed work is visible but never competes with active work.
+25. Create `src/components/Toast.tsx` — a minimal bottom-anchored, auto-dismissing notification surface used for the in-app reminder fallback and for undo-style confirmations, rendered in an `aria-live` region. Expected outcome: one reusable feedback primitive.
+
+## Phase 5 — Due-date and reminder logic
+
+26. In `src/hooks/useReminders.ts`, compute the set of *pending* reminders on every task change: tasks that are not completed, have a `dueAt`, have a non-null `reminderMinutesBefore`, and have `reminderFiredAt` still null. The fire time for each is `dueAt` minus the lead time. Expected outcome: a deterministic, derived reminder schedule with no duplicated bookkeeping.
+27. Schedule with a single rolling timer rather than one timer per task: find the earliest pending fire time, set one `setTimeout` for it (clamped to a safe maximum delay so long-horizon reminders don't overflow the timer, re-arming on wake), and on expiry fire every reminder whose time has now passed, then re-arm for the next earliest. Clear and re-arm the timer whenever the task list or permission state changes, and always clean up on unmount. Expected outcome: reminders fire on time while the app is open, and no timer leaks accumulate.
+28. Handle reminders whose fire time already passed while the app was closed: on mount, treat any pending reminder with a fire time in the past as immediately due and surface it once as a "missed reminder" notification. Expected outcome: closing and reopening the app does not silently swallow reminders.
+29. Delivery has three tiers, decided per fire event. If `Notification` exists and permission is `'granted'`, post a browser notification with the task title and due label. If permission is `'denied'` or the API is unsupported, push a `Toast` instead. If permission is still `'default'`, use the toast and additionally show a one-time dismissible banner in `__root.tsx` explaining that enabling notifications gives reminders when the tab is in the background, linking to `/settings`. Never call `requestPermission()` automatically on load — only from the explicit control in `src/routes/settings.tsx`. Expected outcome: reminders always reach the user somehow, and permission is never demanded unprompted.
+30. After any reminder is delivered, stamp `reminderFiredAt` through `editTask` so it persists and cannot re-fire on the next reload. Clearing or moving a task's `dueAt` to a later time, or un-completing it, resets `reminderFiredAt` to null so the reminder can fire again for the new time. Expected outcome: exactly-once delivery per scheduled time, with correct re-arming on reschedule.
+31. Wrap `Notification` access in a small guarded helper inside `src/lib/notifications.ts` that reports support and current permission and never throws in non-secure or unsupported contexts. Expected outcome: no runtime errors on browsers or contexts without the API.
+
+## Phase 6 — Polish, accessibility, responsiveness
+
+32. Apply the minimal light visual language across components: a single narrow content column, generous line height and vertical rhythm, hairline dividers instead of card borders, one accent colour used sparingly, and short opacity/translate transitions only — no large motion. Expected outcome: visually calm and consistent.
+33. Make the layout mobile-first: comfortably tappable checkbox and control hit areas, the composer's secondary row stacking vertically on narrow screens, filter tabs horizontally scrollable without a visible scrollbar, and the desktop layout capped at a readable measure. Expected outcome: fully usable from roughly 320px up.
+34. Complete the accessibility pass: label every control (visually or via `aria-label`), keep a visible focus ring on all interactive elements, use real `<button>` / `<input type="checkbox">` semantics throughout, announce task added / completed / deleted and reminder events through the `aria-live` region, support Escape to cancel inline edits, and verify the entire flow — add, set a due date, filter, edit, complete, delete — is achievable with the keyboard alone. Expected outcome: keyboard- and screen-reader-operable end to end.
+35. Add the loading and first-run states: suppress the empty state until `useTasks` reports loading complete, and show a brief first-run hint above the composer when storage is empty. Expected outcome: no empty-state flash on reload.
+
+## Phase 7 — Manual test checklist
+
+36. Verify persistence: add several tasks with and without due dates, reload, and confirm titles, completion state, due dates, and reminder settings all survive. Then corrupt the storage value by hand and confirm the app loads to an empty list instead of crashing.
+37. Verify due-date grouping: create tasks due yesterday, later today, tomorrow, and next week, and confirm each lands in the correct bucket, that overdue is highlighted and sorted first, and that the Today / Upcoming / Overdue filters return exactly the expected sets.
+38. Verify overdue transitions: set a task due one minute out and confirm it moves from Today to Overdue on its own within one `useNow` tick, without a manual refresh.
+39. Verify reminders with permission granted: set a reminder a minute out, confirm one browser notification fires, and confirm it does not fire a second time after a reload.
+40. Verify reminder fallbacks: with permission denied, confirm a toast fires instead; with permission at default, confirm the toast plus the one-time settings banner appear and that no permission prompt was triggered on load.
+41. Verify missed reminders: set a reminder in the near future, close the tab past that time, reopen, and confirm a single missed-reminder notice appears.
+42. Verify reschedule semantics: push a fired task's due date later and confirm the reminder re-arms and fires again; complete a task with a pending reminder and confirm it never fires.
+43. Verify CRUD edge cases: empty and whitespace-only titles are rejected, very long titles wrap without breaking layout, inline edit cancels cleanly on Escape, deleting the last task shows the empty state, and clear-completed removes only completed tasks.
+44. Verify responsive and keyboard behaviour at roughly 320px, 768px, and 1280px, tabbing through the full flow with no trapped focus and no invisible focus states.
